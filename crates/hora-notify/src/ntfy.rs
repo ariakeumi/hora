@@ -4,10 +4,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::header::HeaderValue;
 
-use crate::util::{
-    alert_phrase, budget_burn_phrase, cert_expiry_phrase, domain_expiry_phrase, event_suffix,
-    latency_suffix, send_retrying, title_and_body, topology_suffix, vantage_suffix,
-};
+use crate::util::{send_retrying, title_and_message};
 use crate::{AlertSeverity, Event, Notifier};
 
 pub struct NtfyNotifier {
@@ -16,143 +13,41 @@ pub struct NtfyNotifier {
     token: Option<String>,
 }
 
-/// A release event as one text: what is out, what runs, where the notes are.
-fn release_text(release: &crate::Release<'_>) -> String {
-    format!(
-        "RELEASE: {}: {}\n{}",
-        release.monitor,
-        crate::util::release_phrase(release),
-        release.url
-    )
-}
-
 impl NtfyNotifier {
     #[must_use]
     pub fn new(client: Client, url: String, token: Option<String>) -> Self {
         Self { client, url, token }
     }
+}
 
-    fn message(event: Event<'_>) -> (String, &'static str, u8) {
-        match event {
-            Event::Down {
-                monitor,
-                error,
-                cause,
-                impacted,
-                vantage,
-                event,
-            } => {
-                let suffix = topology_suffix(cause, impacted);
-                let vantage = vantage_suffix(vantage);
-                let event = event_suffix(event);
-                let detail = error.map_or_else(String::new, |e| format!("\n{e}"));
-                (
-                    format!("\u{1F534} DOWN: {monitor}{detail}{suffix}{vantage}{event}"),
-                    "rotating_light",
-                    4,
-                )
-            }
-            Event::Degraded {
-                monitor,
-                latency_ms,
-            } => (
-                format!("DEGRADED: {monitor}{}", latency_suffix(latency_ms)),
-                "warning",
-                3,
-            ),
-            Event::Recovered { monitor } => (
-                format!("\u{1F7E2} RECOVERED: {monitor}"),
-                "white_check_mark",
-                2,
-            ),
-            Event::CertExpiring { monitor, days_left } => (
-                format!("CERT: {monitor} {}", cert_expiry_phrase(days_left)),
-                "lock",
-                3,
-            ),
-            Event::DomainExpiring {
-                monitor,
-                domain,
-                days_left,
-            } => (
-                format!(
-                    "DOMAIN: {monitor} {}",
-                    domain_expiry_phrase(domain, days_left)
-                ),
-                "globe_with_meridians",
-                3,
-            ),
-            Event::ReleaseAvailable(release) => (release_text(&release), "package", 3),
-            Event::Digest { period, summary } => {
-                (format!("DIGEST ({period}):\n{summary}"), "bar_chart", 2)
-            }
-            Event::PeerLinkDegraded { peer, witness } => (
-                format!("PEER: {peer} unreachable, but {witness} sees it up (partition)"),
-                "warning",
-                3,
-            ),
-            Event::CertChanged {
-                monitor,
-                old_fingerprint,
-                new_fingerprint,
-            } => (
-                format!("CERT CHANGED: {monitor}\nold: {old_fingerprint}\nnew: {new_fingerprint}"),
-                "lock",
-                4,
-            ),
-            Event::BudgetBurn {
-                monitor,
-                burn_rate_x10,
-                window,
-                exhausted_in_secs,
-            } => (
-                format!(
-                    "BUDGET: {monitor} {}",
-                    budget_burn_phrase(burn_rate_x10, window, exhausted_in_secs)
-                ),
-                "fire",
-                4,
-            ),
-            Event::Alert {
-                monitor,
-                severity,
-                title,
-                message,
-            } => {
-                // ntfy priority runs 1 (min) to 5 (max): map the severity onto it.
-                let (tag, priority) = match severity {
-                    AlertSeverity::Info => ("information_source", 2),
-                    AlertSeverity::Warning => ("warning", 3),
-                    AlertSeverity::Error => ("rotating_light", 4),
-                    AlertSeverity::Critical => ("rotating_light", 5),
-                };
-                (
-                    alert_phrase(monitor, severity, title, message),
-                    tag,
-                    priority,
-                )
-            }
-        }
+/// The ntfy tag and priority (1 min - 5 max) for an event, mapped from its
+/// nature or, for a pushed alert, its severity.
+fn tags_and_priority(event: Event<'_>) -> (&'static str, u8) {
+    match event {
+        Event::Down { .. } => ("rotating_light", 4),
+        Event::Degraded { .. } | Event::PeerLinkDegraded { .. } => ("warning", 3),
+        Event::Recovered { .. } => ("white_check_mark", 2),
+        Event::CertExpiring { .. } => ("lock", 3),
+        Event::DomainExpiring { .. } => ("globe_with_meridians", 3),
+        Event::ReleaseAvailable { .. } => ("package", 3),
+        Event::Digest { .. } => ("bar_chart", 2),
+        Event::CertChanged { .. } => ("lock", 4),
+        Event::BudgetBurn { .. } => ("fire", 4),
+        Event::Alert { severity, .. } => match severity {
+            AlertSeverity::Info => ("information_source", 2),
+            AlertSeverity::Warning => ("warning", 3),
+            AlertSeverity::Error => ("rotating_light", 4),
+            AlertSeverity::Critical => ("rotating_light", 5),
+        },
     }
 }
 
-/// The `Title` header and the body for a rendered message: the headline (first
-/// line, e.g. `DOWN: API`) becomes the title and the rest the body, so the
-/// notification list shows what happened instead of a fixed app label. Header
-/// values carry visible ASCII plus obs-text bytes, so UTF-8 headlines (a
-/// monitor name in any script) travel as-is; a headline with characters no
-/// header may carry (control characters) keeps the message whole and no
-/// `Title` header is sent - one that reqwest cannot build would panic.
-fn title_header_and_body(message: &str) -> (Option<String>, String) {
-    let (title, body) = title_and_body(message);
-    let title = title.filter(|t| HeaderValue::from_str(t).is_ok());
-    // Without a header-encodable headline the message stays whole.
-    let body = if title.is_some() {
-        body.to_owned()
-    } else {
-        message.to_owned()
-    };
-    (title.map(str::to_owned), body)
+/// The `Title` header for a notification. Header values carry visible ASCII
+/// plus obs-text bytes, so UTF-8 titles (a monitor name in any script)
+/// travel; one with characters no header may carry (control characters)
+/// returns `None` instead of a value reqwest would reject.
+fn title_header(title: &str) -> Option<HeaderValue> {
+    HeaderValue::from_str(title).ok()
 }
 
 #[async_trait]
@@ -162,12 +57,12 @@ impl Notifier for NtfyNotifier {
     }
 
     async fn notify(&self, event: Event<'_>) -> anyhow::Result<()> {
-        let (message, tags, priority) = Self::message(event);
-        let (title, body) = title_header_and_body(&message);
+        let (title, message) = title_and_message(event);
+        let (tags, priority) = tags_and_priority(event);
         let build = || {
-            let mut req = self.client.post(&self.url).body(body.clone());
-            if let Some(title) = &title {
-                req = req.header("Title", title);
+            let mut req = self.client.post(&self.url).body(message.clone());
+            if let Some(head) = title_header(&title) {
+                req = req.header("Title", head);
             }
             req = req.header("Tags", tags);
             req = req.header("Priority", priority.to_string());
@@ -191,27 +86,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_title_header_is_the_message_headline() {
-        let (title, body) = title_header_and_body("\u{1F534} DOWN: API\nboom");
-        assert_eq!(title.as_deref(), Some("\u{1F534} DOWN: API"));
-        assert_eq!(body, "boom");
-
-        // A single-line message carries no title at all: it would only
-        // duplicate the body.
-        let (title, body) = title_header_and_body("\u{1F7E2} RECOVERED: API");
-        assert_eq!(title, None);
-        assert_eq!(body, "\u{1F7E2} RECOVERED: API");
-
-        // A non-ASCII headline (a monitor name in any script) still travels:
-        // header values carry obs-text bytes, which ntfy reads as UTF-8.
-        let (title, body) = title_header_and_body("DOWN: 数据库\nboom");
-        assert_eq!(title.as_deref(), Some("DOWN: 数据库"));
-        assert_eq!(body, "boom");
-
-        // A headline with characters no header may carry (e.g. a control
-        // character) falls back to the whole message and no title.
-        let (title, body) = title_header_and_body("DOWN: API\u{0}\nboom");
-        assert_eq!(title, None);
-        assert_eq!(body, "DOWN: API\u{0}\nboom");
+    fn the_title_header_takes_utf8_but_not_control_characters() {
+        assert!(title_header("Hora: API").is_some());
+        assert!(title_header("Hora: 数据库").is_some());
+        assert!(title_header("Hora: API\u{0}").is_none());
     }
 }

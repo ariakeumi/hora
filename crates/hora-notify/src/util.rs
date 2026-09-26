@@ -4,7 +4,7 @@ use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
 use tracing::warn;
 
-use crate::AlertSeverity;
+use crate::{AlertSeverity, Event};
 
 /// The text of a pushed-alert notification, shared so every channel words it
 /// identically: `"[ERROR] Monitor: title"`, then the message on its own line
@@ -125,17 +125,103 @@ pub(crate) fn release_phrase(release: &crate::Release<'_>) -> String {
     )
 }
 
-/// The title/body pair for the backends with a native title field (Gotify,
-/// ntfy, Pushover): the title is the message's headline - its first line, e.g.
-/// `DOWN: API` - and the body is what follows it. A single-line message has no
-/// headline to factor out: the whole text stays in the body and no title is
-/// sent, since a title equal to the body would only duplicate it.
-pub(crate) fn title_and_body(message: &str) -> (Option<&str>, &str) {
-    match message.split_once('\n') {
-        // The body must stay non-empty (Pushover requires one), so a headline
-        // with nothing after it keeps the message whole.
-        Some((title, body)) if !body.is_empty() => (Some(title), body),
-        _ => (None, message),
+/// The title and body for the backends with a native title field (Gotify,
+/// ntfy, Pushover), shared so all three render one event identically: the
+/// title names the app and the monitor - `Hora: API` - so the notification
+/// list answers "which monitor is this about", and the body carries the event
+/// line with the detail below it (`🔴 Down: API`, `🟢 Recovered: API`).
+pub(crate) fn title_and_message(event: Event<'_>) -> (String, String) {
+    match event {
+        Event::Down {
+            monitor,
+            error,
+            cause,
+            impacted,
+            vantage,
+            event,
+        } => {
+            let detail = error.map_or_else(String::new, |e| format!("\n{e}"));
+            (
+                format!("Hora: {monitor}"),
+                format!(
+                    "\u{1F534} Down: {monitor}{detail}{}{}{}",
+                    topology_suffix(cause, impacted),
+                    vantage_suffix(vantage),
+                    event_suffix(event),
+                ),
+            )
+        }
+        Event::Degraded {
+            monitor,
+            latency_ms,
+        } => (
+            format!("Hora: {monitor}"),
+            format!("Degraded: {monitor}{}", latency_suffix(latency_ms)),
+        ),
+        Event::Recovered { monitor } => (
+            format!("Hora: {monitor}"),
+            format!("\u{1F7E2} Recovered: {monitor}"),
+        ),
+        Event::CertExpiring { monitor, days_left } => (
+            format!("Hora: {monitor}"),
+            format!("Cert: {monitor} {}", cert_expiry_phrase(days_left)),
+        ),
+        Event::DomainExpiring {
+            monitor,
+            domain,
+            days_left,
+        } => (
+            format!("Hora: {monitor}"),
+            format!(
+                "Domain: {monitor} {}",
+                domain_expiry_phrase(domain, days_left)
+            ),
+        ),
+        Event::ReleaseAvailable(release) => (
+            format!("Hora: {}", release.monitor),
+            format!(
+                "Release: {}: {}\n{}",
+                release.monitor,
+                release_phrase(&release),
+                release.url
+            ),
+        ),
+        Event::Digest { period, summary } => {
+            (format!("Hora: digest ({period})"), summary.to_owned())
+        }
+        Event::PeerLinkDegraded { peer, witness } => (
+            format!("Hora: {peer}"),
+            format!("Peer: {peer} unreachable, but {witness} sees it up (partition)"),
+        ),
+        Event::CertChanged {
+            monitor,
+            old_fingerprint,
+            new_fingerprint,
+        } => (
+            format!("Hora: {monitor}"),
+            format!("Cert changed: {monitor}\nold: {old_fingerprint}\nnew: {new_fingerprint}"),
+        ),
+        Event::BudgetBurn {
+            monitor,
+            burn_rate_x10,
+            window,
+            exhausted_in_secs,
+        } => (
+            format!("Hora: {monitor}"),
+            format!(
+                "Budget: {monitor} {}",
+                budget_burn_phrase(burn_rate_x10, window, exhausted_in_secs)
+            ),
+        ),
+        Event::Alert {
+            monitor,
+            severity,
+            title,
+            message,
+        } => (
+            format!("Hora: {monitor}"),
+            alert_phrase(monitor, severity, title, message),
+        ),
     }
 }
 
@@ -304,20 +390,41 @@ mod tests {
     }
 
     #[test]
-    fn title_and_body_splits_on_the_headline() {
-        let (title, body) = title_and_body("DOWN: API\nboom\ncaused by DB");
-        assert_eq!(title, Some("DOWN: API"));
-        assert_eq!(body, "boom\ncaused by DB");
+    fn titles_name_the_monitor_and_bodies_carry_the_event() {
+        let (title, message) = title_and_message(Event::Down {
+            monitor: "API",
+            error: Some("boom"),
+            cause: None,
+            impacted: &[],
+            vantage: None,
+            event: None,
+        });
+        assert_eq!(title, "Hora: API");
+        assert_eq!(message, "\u{1F534} Down: API\nboom");
 
-        // A single-line message keeps the whole text: a title equal to the
-        // body would only duplicate it.
-        assert_eq!(title_and_body("RECOVERED: API"), (None, "RECOVERED: API"));
-        // So does a headline with nothing after it (the body must stay
-        // non-empty for APIs that require one).
-        assert_eq!(
-            title_and_body("DIGEST (daily):\n"),
-            (None, "DIGEST (daily):\n")
-        );
+        // Topology, vantage and event annotations ride on the body, not the
+        // title.
+        let (_, message) = title_and_message(Event::Down {
+            monitor: "DB",
+            error: Some("refused"),
+            cause: None,
+            impacted: &["API"],
+            vantage: None,
+            event: None,
+        });
+        assert!(message.contains("\u{1F534} Down: DB") && message.contains("impacts 1: API"));
+
+        let (title, message) = title_and_message(Event::Recovered { monitor: "API" });
+        assert_eq!(title, "Hora: API");
+        assert_eq!(message, "\u{1F7E2} Recovered: API");
+
+        // The digest has no monitor: the period takes its place in the title.
+        let (title, message) = title_and_message(Event::Digest {
+            period: "daily",
+            summary: "all quiet",
+        });
+        assert_eq!(title, "Hora: digest (daily)");
+        assert_eq!(message, "all quiet");
     }
 
     #[test]

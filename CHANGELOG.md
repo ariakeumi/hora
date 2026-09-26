@@ -23,19 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Gotify, ntfy and Pushover notifications now carry the event as their
-  title** - a red-circle `🔴 DOWN: API` or green-circle `🟢 RECOVERED: API`
-  headline, with the detail below it, instead of a fixed "Hora Alert" label.
-  A single-line message (e.g. a recovery) sends no title at all, since it
-  would only duplicate the body. On ntfy the title travels as an HTTP header;
-  a headline containing characters no header may carry keeps the message body
-  whole instead. (Free Mobile SMS stays emoji-free on purpose: any non-GSM
-  character switches the SMS to the pricier UCS-2 encoding.)
+- **New notification template for Gotify, ntfy and Pushover**: the title
+  names the app and the monitor (`Hora: API`) and the body carries the event
+  line with the detail below it - `🔴 Down: API`, `🟢 Recovered: API` -
+  instead of a fixed "Hora Alert" label with the status buried in the body.
+  On ntfy the title travels as an HTTP header; one containing characters no
+  header may carry (control characters) is dropped rather than failing the
+  send. (Free Mobile SMS keeps its plain, emoji-free wording on purpose: any
+  non-GSM character switches the SMS to the pricier UCS-2 encoding.)
 
 - **Container images run as root** (uid 10001 before): a `/data` bind mount
   works without host-side chown, and a fresh named volume inherits root
   ownership. Drop privileges at deploy time (compose `user:`,
   k8s `securityContext`) if the deployment wants to.
+
+- **No footer on the web pages**: the `Updated … · Powered by Hora` bar is
+  removed from every page. The SLA report keeps its methodology footnote and
+  the plain-text view keeps its `Updated:` line.
 
 ## [0.10.0] - 2026-09-21
 
