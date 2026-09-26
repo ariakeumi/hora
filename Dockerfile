@@ -20,12 +20,8 @@ RUN cargo build --release --locked -p hora \
 # --- Runtime stage: Alpine + CA certs (a few MB) --------------------------
 FROM alpine:3.24 AS runtime
 
-# A non-root user owns /data (a fresh named volume inherits this ownership).
 RUN apk add --no-cache ca-certificates \
-    && addgroup -S hora \
-    && adduser -S -G hora -u 10001 hora \
-    && mkdir -p /data \
-    && chown hora:hora /data
+    && mkdir -p /data
 
 COPY --from=builder /hora /usr/local/bin/hora
 
@@ -36,7 +32,10 @@ ENV HORA_CONFIG=/etc/hora/config.toml \
 
 VOLUME ["/data"]
 EXPOSE 8787
-USER 10001:10001
+# Runs as root: a host bind mount for /data needs no host-side chown, and a
+# fresh named volume inherits root ownership. Drop privileges at deploy time
+# instead (compose `user:`, k8s securityContext) if the deployment wants to.
+USER 0:0
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
     CMD wget -qO- http://127.0.0.1:8787/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/hora"]

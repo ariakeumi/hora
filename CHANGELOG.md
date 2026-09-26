@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Light mode**: every page follows the visitor's system preference
+  (`prefers-color-scheme`) - a light palette on light systems, the unchanged
+  dark one otherwise, with the browser UI tinted to match (`theme-color`).
+  The SVG latency heatmaps carry the same rule inside the SVG itself (they
+  are embedded as images and see no page CSS). There is no manual switch:
+  the web UI ships no JavaScript by design (a hard CSP), so the media query
+  is the switch.
+
+- **Rolling `latest` image**: every push to main builds and pushes
+  `ghcr.io/<owner>/hora:latest` (amd64 + arm64) to GHCR via the new
+  `Docker latest` workflow; versioned images remain tag-only builds in CI.
+
+### Changed
+
+- **Gotify, ntfy and Pushover notifications now carry the event as their
+  title** - a red-circle `🔴 DOWN: API` or green-circle `🟢 RECOVERED: API`
+  headline, with the detail below it, instead of a fixed "Hora Alert" label.
+  A single-line message (e.g. a recovery) sends no title at all, since it
+  would only duplicate the body. On ntfy the title travels as an HTTP header;
+  a headline containing characters no header may carry keeps the message body
+  whole instead. (Free Mobile SMS stays emoji-free on purpose: any non-GSM
+  character switches the SMS to the pricier UCS-2 encoding.)
+
+- **Container images run as root** (uid 10001 before): a `/data` bind mount
+  works without host-side chown, and a fresh named volume inherits root
+  ownership. Drop privileges at deploy time (compose `user:`,
+  k8s `securityContext`) if the deployment wants to.
+
 ## [0.10.0] - 2026-09-21
 
 ### Added

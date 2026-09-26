@@ -5,7 +5,7 @@ use reqwest::Client;
 
 use crate::util::{
     alert_phrase, budget_burn_phrase, cert_expiry_phrase, domain_expiry_phrase, event_suffix,
-    latency_suffix, send_retrying, topology_suffix, vantage_suffix,
+    latency_suffix, send_retrying, title_and_body, topology_suffix, vantage_suffix,
 };
 use crate::{AlertSeverity, Event, Notifier};
 
@@ -52,7 +52,7 @@ impl PushoverNotifier {
                 let event = event_suffix(event);
                 let detail = error.map_or_else(String::new, |e| format!("\n{e}"));
                 (
-                    format!("DOWN: {monitor}{detail}{suffix}{vantage}{event}"),
+                    format!("\u{1F534} DOWN: {monitor}{detail}{suffix}{vantage}{event}"),
                     1,
                 )
             }
@@ -63,7 +63,7 @@ impl PushoverNotifier {
                 format!("DEGRADED: {monitor}{}", latency_suffix(latency_ms)),
                 0,
             ),
-            Event::Recovered { monitor } => (format!("RECOVERED: {monitor}"), -1),
+            Event::Recovered { monitor } => (format!("\u{1F7E2} RECOVERED: {monitor}"), -1),
             Event::CertExpiring { monitor, days_left } => (
                 format!("CERT: {monitor} {}", cert_expiry_phrase(days_left)),
                 0,
@@ -124,6 +124,21 @@ impl PushoverNotifier {
     }
 }
 
+/// The JSON payload for a rendered message and priority: the message's
+/// headline becomes the title when there is a body to go under it, so the
+/// Pushover list shows what happened instead of a fixed app label.
+fn payload_json(message: &str, priority: i8) -> serde_json::Value {
+    let (title, body) = title_and_body(message);
+    let mut payload = serde_json::json!({
+        "message": body,
+        "priority": priority,
+    });
+    if let Some(title) = title {
+        payload["title"] = title.into();
+    }
+    payload
+}
+
 #[async_trait]
 impl Notifier for PushoverNotifier {
     fn name(&self) -> &'static str {
@@ -133,13 +148,10 @@ impl Notifier for PushoverNotifier {
     async fn notify(&self, event: Event<'_>) -> anyhow::Result<()> {
         let (message, priority) = Self::message(event);
         let build = || {
-            self.client.post(PUSHOVER_API).json(&serde_json::json!({
-                "token": self.token,
-                "user": self.user,
-                "message": message,
-                "title": "Hora Alert",
-                "priority": priority,
-            }))
+            let mut payload = payload_json(&message, priority);
+            payload["token"] = self.token.as_str().into();
+            payload["user"] = self.user.as_str().into();
+            self.client.post(PUSHOVER_API).json(&payload)
         };
         // The user key is a quasi-secret too: it lets anyone message the user.
         send_retrying(
@@ -148,5 +160,23 @@ impl Notifier for PushoverNotifier {
             &[self.token.as_str(), self.user.as_str()],
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_title_is_the_message_headline() {
+        let payload = payload_json("\u{1F534} DOWN: API\nboom", 1);
+        assert_eq!(payload["title"], "\u{1F534} DOWN: API");
+        assert_eq!(payload["message"], "boom");
+
+        // A single-line message carries no title at all: it would only
+        // duplicate the body.
+        let payload = payload_json("\u{1F7E2} RECOVERED: API", -1);
+        assert!(payload.get("title").is_none());
+        assert_eq!(payload["message"], "\u{1F7E2} RECOVERED: API");
     }
 }

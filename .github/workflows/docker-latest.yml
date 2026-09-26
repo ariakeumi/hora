@@ -1,0 +1,54 @@
+name: Docker latest
+
+# A rolling image for every push to main: ghcr.io/<owner>/hora:latest, running
+# as root (see the Dockerfile). Versioned release images stay tag-only builds
+# in ci.yml - "latest" mirrors main and never carries a release tag, so one
+# commit builds at most once per workflow.
+on:
+  push:
+    branches: [main]
+    # Docs and prose cannot change the image; a rebuild would only re-push
+    # identical layers.
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # "latest" is a rolling tag: a newer main always wins over a queued build.
+  cancel-in-progress: true
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/hora
+          tags: type=raw,value=latest
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

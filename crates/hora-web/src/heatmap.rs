@@ -38,6 +38,14 @@ fn tier_color(ratio: f64) -> &'static str {
     }
 }
 
+/// The SVG's own palette, mirroring the pages': it is embedded via `<img>` (or
+/// opened standalone), so it cannot see the page's CSS, and there is no
+/// JavaScript (a hard CSP) to pass a choice in - the same `prefers-color-scheme`
+/// media query the templates use is the light-mode switch here too.
+const PALETTE: &str = "<style>.hm-bg{fill:var(--hm-bg)}.hm-fg{fill:var(--hm-fg)}\
+:root{--hm-bg:#11161f;--hm-fg:#8b93a1}\
+@media (prefers-color-scheme:light){:root{--hm-bg:#ffffff;--hm-fg:#667085}}</style>";
+
 /// Render the heatmap SVG from `(hour_ts, avg_latency_ms)` cells (as returned
 /// by [`hora_core::db::latency_hourly`]). `now` anchors the window: the last
 /// column is today (UTC), hours run top to bottom.
@@ -69,9 +77,12 @@ pub(crate) fn render(cells: &[(i64, i64)], now: i64, monitor_name: &str) -> Stri
          aria-label=\"Latency heatmap of {name}, last {HEATMAP_DAYS} days\" \
          font-family=\"ui-sans-serif,system-ui,sans-serif\" font-size=\"8\">"
     );
+    svg.push_str(PALETTE);
+    // The fill attributes are the fallback for renderers without CSS; the
+    // `.hm-*` rules (which beat presentation attributes) retheme those two.
     let _ = write!(
         svg,
-        "<rect width=\"{width:.0}\" height=\"{height:.0}\" rx=\"6\" fill=\"#11161f\"/>"
+        "<rect class=\"hm-bg\" width=\"{width:.0}\" height=\"{height:.0}\" rx=\"6\" fill=\"#11161f\"/>"
     );
 
     // Hour gutter: a label every six rows is enough to orient.
@@ -79,7 +90,7 @@ pub(crate) fn render(cells: &[(i64, i64)], now: i64, monitor_name: &str) -> Stri
         let y = TOP + coordf(hour) * CELL_H + 7.0;
         let _ = write!(
             svg,
-            "<text x=\"{x:.0}\" y=\"{y:.1}\" fill=\"#8b93a1\" text-anchor=\"end\">{hour:02}h</text>",
+            "<text class=\"hm-fg\" x=\"{x:.0}\" y=\"{y:.1}\" fill=\"#8b93a1\" text-anchor=\"end\">{hour:02}h</text>",
             x = LEFT - 5.0,
         );
     }
@@ -95,7 +106,7 @@ pub(crate) fn render(cells: &[(i64, i64)], now: i64, monitor_name: &str) -> Stri
         {
             let _ = write!(
                 svg,
-                "<text x=\"{x:.1}\" y=\"{y:.0}\" fill=\"#8b93a1\">{label}</text>",
+                "<text class=\"hm-fg\" x=\"{x:.1}\" y=\"{y:.0}\" fill=\"#8b93a1\">{label}</text>",
                 y = TOP - 6.0,
                 label = date.format("%a %d"),
             );
@@ -171,5 +182,17 @@ mod tests {
         let svg = render(&[], 30 * 86_400, "API");
         assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"));
         assert_eq!(svg.matches("<rect").count(), 1);
+    }
+
+    #[test]
+    fn the_svg_carries_its_own_theme() {
+        let svg = render(&[], 30 * 86_400, "API");
+        // Rethemed with the pages via the same media query (an <img> embed sees
+        // no page CSS, and there is no JS to pass a choice in), with the dark
+        // fill attributes kept as the no-CSS fallback.
+        assert!(svg.contains("prefers-color-scheme:light"));
+        assert!(svg.contains("--hm-bg:#ffffff"));
+        assert!(svg.contains("class=\"hm-bg\""));
+        assert!(svg.contains("fill=\"#11161f\""));
     }
 }

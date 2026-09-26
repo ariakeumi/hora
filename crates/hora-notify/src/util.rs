@@ -125,6 +125,20 @@ pub(crate) fn release_phrase(release: &crate::Release<'_>) -> String {
     )
 }
 
+/// The title/body pair for the backends with a native title field (Gotify,
+/// ntfy, Pushover): the title is the message's headline - its first line, e.g.
+/// `DOWN: API` - and the body is what follows it. A single-line message has no
+/// headline to factor out: the whole text stays in the body and no title is
+/// sent, since a title equal to the body would only duplicate it.
+pub(crate) fn title_and_body(message: &str) -> (Option<&str>, &str) {
+    match message.split_once('\n') {
+        // The body must stay non-empty (Pushover requires one), so a headline
+        // with nothing after it keeps the message whole.
+        Some((title, body)) if !body.is_empty() => (Some(title), body),
+        _ => (None, message),
+    }
+}
+
 /// Delivery attempts: the initial send plus two retries. The caller marks the
 /// alert as sent regardless of the outcome, so a transient blip here would
 /// otherwise silently drop the notification.
@@ -287,6 +301,23 @@ mod tests {
         assert_eq!(cert_expiry_phrase(0), "has expired");
         assert_eq!(cert_expiry_phrase(1), "expires in 1 day");
         assert_eq!(cert_expiry_phrase(3), "expires in 3 days");
+    }
+
+    #[test]
+    fn title_and_body_splits_on_the_headline() {
+        let (title, body) = title_and_body("DOWN: API\nboom\ncaused by DB");
+        assert_eq!(title, Some("DOWN: API"));
+        assert_eq!(body, "boom\ncaused by DB");
+
+        // A single-line message keeps the whole text: a title equal to the
+        // body would only duplicate it.
+        assert_eq!(title_and_body("RECOVERED: API"), (None, "RECOVERED: API"));
+        // So does a headline with nothing after it (the body must stay
+        // non-empty for APIs that require one).
+        assert_eq!(
+            title_and_body("DIGEST (daily):\n"),
+            (None, "DIGEST (daily):\n")
+        );
     }
 
     #[test]

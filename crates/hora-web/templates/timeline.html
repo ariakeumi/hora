@@ -4,6 +4,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0e14" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f6f9" />
   <title>{{ title }} · Timeline</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="preload" href="/assets/CalSans-SemiBold.woff2" as="font" type="font/woff2" crossorigin />
@@ -16,6 +18,7 @@
     }
 
     :root {
+      color-scheme: dark;
       --bg: #0b0e14;
       --card: #11161f;
       --border: #1d2430;
@@ -26,6 +29,23 @@
       --degraded: #f59e0b;
       --info: #3b82f6;
       --brand: "Cal Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+
+    /* Light mode follows the visitor's system preference: the UI ships no
+       JavaScript (a hard CSP), so the media query is the only switch. */
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f9;
+        --card: #ffffff;
+        --border: #dde3ea;
+        --text: #1b222c;
+        --muted: #667283;
+        --up: #059669;
+        --down: #dc2626;
+        --degraded: #d97706;
+        --info: #2563eb;
+      }
     }
 
     * {

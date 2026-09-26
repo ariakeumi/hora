@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::util::{
     alert_phrase, budget_burn_phrase, cert_expiry_phrase, domain_expiry_phrase, event_suffix,
-    latency_suffix, send_retrying, topology_suffix, vantage_suffix,
+    latency_suffix, send_retrying, title_and_body, topology_suffix, vantage_suffix,
 };
 use crate::{AlertSeverity, Event, Notifier};
 
@@ -47,7 +47,7 @@ impl GotifyNotifier {
                 let event = event_suffix(event);
                 let detail = error.map_or_else(String::new, |e| format!("\n{e}"));
                 (
-                    format!("DOWN: {monitor}{detail}{suffix}{vantage}{event}"),
+                    format!("\u{1F534} DOWN: {monitor}{detail}{suffix}{vantage}{event}"),
                     8,
                 )
             }
@@ -58,7 +58,7 @@ impl GotifyNotifier {
                 format!("DEGRADED: {monitor}{}", latency_suffix(latency_ms)),
                 5,
             ),
-            Event::Recovered { monitor } => (format!("RECOVERED: {monitor}"), 2),
+            Event::Recovered { monitor } => (format!("\u{1F7E2} RECOVERED: {monitor}"), 2),
             Event::CertExpiring { monitor, days_left } => (
                 format!("CERT: {monitor} {}", cert_expiry_phrase(days_left)),
                 5,
@@ -116,9 +116,12 @@ impl GotifyNotifier {
                 (alert_phrase(monitor, severity, title, message), priority)
             }
         };
+        // The message's headline becomes the title, so the notification list
+        // shows what happened instead of a fixed app label.
+        let (title, body) = title_and_body(&message);
         Payload {
-            title: "Hora Alert".to_owned(),
-            message,
+            title: title.map(str::to_owned),
+            message: body.to_owned(),
             priority,
         }
     }
@@ -126,7 +129,8 @@ impl GotifyNotifier {
 
 #[derive(Serialize)]
 struct Payload {
-    title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
     message: String,
     priority: u8,
 }
@@ -149,5 +153,30 @@ impl Notifier for GotifyNotifier {
                 .json(&payload)
         };
         send_retrying(build, "gotify", &[self.token.as_str()]).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_title_is_the_message_headline() {
+        let down = GotifyNotifier::payload(Event::Down {
+            monitor: "API",
+            error: Some("boom"),
+            cause: None,
+            impacted: &[],
+            vantage: None,
+            event: None,
+        });
+        assert_eq!(down.title.as_deref(), Some("\u{1F534} DOWN: API"));
+        assert_eq!(down.message, "boom");
+
+        // A single-line message carries no title: it would only duplicate the
+        // body, which the clients headline themselves.
+        let recovered = GotifyNotifier::payload(Event::Recovered { monitor: "API" });
+        assert_eq!(recovered.title, None);
+        assert_eq!(recovered.message, "\u{1F7E2} RECOVERED: API");
     }
 }
