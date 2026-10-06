@@ -6,7 +6,7 @@ description: HTTP, TCP, ICMP, DNS and push probes - assertions, dual-stack, topo
 A monitor is a `[[monitors]]` entry with an `id`, a `name`, a `kind` and a
 probing cadence (`interval_secs`, `timeout_secs`). Failed probes are retried
 once (after 1s) before anything is recorded - override with
-`probe_retries = 0..5` - so a one-off network blip never pollutes the history
+`probe_retries = 0..10` - so a one-off network blip never pollutes the history
 or the error budget. Every failure that survives its retry is logged with its
 reason and shown as a tooltip on the status dot (plus `last_error` in the
 API).

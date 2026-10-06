@@ -1784,8 +1784,8 @@ fn validate_monitor_io(monitor: &Monitor) -> anyhow::Result<()> {
     // Each retry can cost a full timeout; an unbounded count would let one
     // tick outlive several intervals.
     anyhow::ensure!(
-        monitor.probe_retries.is_none_or(|retries| retries <= 5),
-        "monitor {}: probe_retries must be at most 5",
+        monitor.probe_retries.is_none_or(|retries| retries <= 10),
+        "monitor {}: probe_retries must be at most 10",
         monitor.id
     );
     anyhow::ensure!(
@@ -3864,11 +3864,25 @@ mod tests {
             name = "M"
             target = "https://example.com"
             interval_secs = 60
-            probe_retries = 6
+            probe_retries = 10
+        "#,
+        );
+        validate(&config).expect("10 is the accepted maximum");
+
+        let config = parse(
+            r#"
+            [page]
+            [server]
+            [[monitors]]
+            id = "m"
+            name = "M"
+            target = "https://example.com"
+            interval_secs = 60
+            probe_retries = 11
         "#,
         );
         let error = validate(&config).unwrap_err().to_string();
-        assert!(error.contains("at most 5"), "{error}");
+        assert!(error.contains("at most 10"), "{error}");
     }
 
     #[test]

@@ -125,7 +125,7 @@ default_retention_days = 90
 # Failed probes are re-tried once (after 1s) before being recorded, so a
 # single network blip between Hora and the target never lands in the history,
 # the uptime numbers or the error budget. Override per monitor with
-# `probe_retries = 0..5` (0 = record every raw result).
+# `probe_retries = 0..10` (0 = record every raw result).
 #
 # Root-cause alert grouping: a monitor confirmed down whose upstream
 # (`depends_on`) is also down waits this many seconds; if the upstream alerts
